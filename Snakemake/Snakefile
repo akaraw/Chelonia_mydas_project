@@ -1,0 +1,130 @@
+# This should be placed in the Snakefile.
+##-----------------------------------------------##
+## Working directory                             ##
+## Adapt to your needs                           ##
+##-----------------------------------------------##
+
+BASE_DIR = "/path/to/base_directory"
+WDIR = BASE_DIR + "/cmydas" #This is where all the fastq files are located (paired end)
+
+##--------------------------------------------------------------------------------------##
+## Variables declaration
+## Declaring some variables used by topHat and other tools...
+## (GTF file, INDEX, chromosome length)
+##--------------------------------------------------------------------------------------##
+# Adapt the path to your needs
+
+GENOME_DIR = "/path/to/genome_dir_index"
+GENOME = GENOME_DIR + "/cmydas"
+GTF = "/path/to/annotation/file/cmydas.gtf"
+
+##--------------------------------------------------------------------------------------##
+## The list of samples to be processed
+##--------------------------------------------------------------------------------------##
+
+SAMPLES, = glob_wildcards( WDIR + "/{smp}_1.fastq.gz")
+NB_SAMPLES = len(SAMPLES)
+
+rule all:
+        input:
+         out = expand("htseq/{smp}.tsv",smp=SAMPLES),
+         out2 = expand("stringtie_gtf/{smp}.gtf",smp=SAMPLES)
+
+rule trimming:
+        input:
+         fwd = WDIR + "/{smp}_1.fastq.gz", #rules.filter_uncorrected.output.fwd,
+         rev = WDIR + "/{smp}_2.fastq.gz" #rules.filter_uncorrected.output.rev
+        output:
+         fwd="results/trimmed/{smp}/{smp}_val_1.fq.gz",
+         rev="results/trimmed/{smp}/{smp}_val_2.fq.gz"
+        message: """--- Trimming."""
+        conda: "env/transcriptome.yaml"
+        threads: 20
+        params:
+         base = "results/trimmed/{smp}"
+        shell:
+         "trim_galore --paired --retain_unpaired --phred33 --basename {wildcards.smp} -j 4 --output_dir {params.base} --length 36 -q 20 --stringency 1 -e 0.1 "
+         "{input.fwd} {input.rev} > output.out 2>&1"
+
+rule fastqc2:
+        input:
+         fwd = rules.trimming.output.fwd,
+         rev = rules.trimming.output.rev
+        output:
+         fwd=temp("fastqc2/{smp}/{smp}_val_1_fastqc/fastqc_data.txt"),
+         rev=temp("fastqc2/{smp}/{smp}_val_2_fastqc/fastqc_data.txt")
+        message: """--- Quality check of raw data with Fastqc"""
+        conda: "env/transcriptome.yaml"
+        threads: 10
+        shell: "fastqc -t 12 --outdir fastqc2/{wildcards.smp} --extract -f fastq {input.fwd} {input.rev}"
+
+rule star:
+        input:
+         fwd = rules.trimming.output.fwd,
+         rev = rules.trimming.output.rev,
+         fq1 = rules.fastqc2.output.fwd,
+         fq2 = rules.fastqc2.output.rev
+        output:
+         bam = "results/STAR_bam/{smp}Aligned.sortedByCoord.out.bam"
+        params:
+         type = "BAM",
+         sort = "SortedByCoordinate",
+         mode = "alignReads",
+         genome = GENOME
+        threads: 20
+        conda: "env/transcriptome.yaml"
+        shell:
+         "STAR  --readFilesCommand zcat --runMode alignReads --runThreadN 12 --genomeDir {params.genome} --readFilesIn {input.fwd} {input.rev} --outSAMtype BAM SortedByCoordinate "
+         "--outFileNamePrefix results/STAR_bam/{wildcards.smp}"
+
+rule htseq:
+        input:
+         BAM = rules.star.output.bam,
+         gtf = GTF
+        output:
+         OUT = "htseq/{smp}.tsv",
+         ERR = "htseq/log/{smp}.err"
+        conda: "env/transcriptome.yaml"
+        shell:
+         "htseq-count -f bam --order=name --nonunique=all -s yes -a 20 -t CDS -i gene_id -m intersection-strict {input.BAM} {input.gtf} > {output.OUT} 2> {output.ERR}"
+
+rule stringtie01:
+        input:
+         bam = rules.star.output.bam,
+         gtf = GTF,
+         ht = rules.htseq.output.OUT
+        output:
+         out = temp("stringtie_tab/{smp}.list")
+        message: "--- Diffrential Gene Expression Analysis with Stringtie step 01"
+        threads: 20
+        conda: "env/transcriptome.yaml"
+        shell:
+         "mkdir -p stringite_gtf && stringtie {input.bam} -C {wildcards.smp}.1.ref.gtf -A {wildcards.smp}.1.tab -p 20 -G {input.gtf} -o {wildcards.smp}.out.gtf && ls *.out.gtf"
+         " > {output.out} "
+
+rule stringtie_merge:
+        input:
+         list = rules.stringtie01.output.out,
+         gtf = GTF
+        output:
+         merge = "stringtie_gtf/{smp}_merged.gtf"
+        conda:"env/transcriptome.yaml"
+        shell:
+         " stringtie --merge -G {input.gtf} -o {output.merge} {input.list}"
+
+rule stringtie02:
+        message: "--- Diffrential Gene Expression Analysis with Stringtie step 02"
+        conda: "env/transcriptome.yaml"
+        input:
+         bam = rules.star.output.bam,
+         gtf = rules.stringtie_merge.output.merge
+        threads : 20
+        output:
+         out = "stringtie_gtf/{smp}.gtf"
+        shell:
+         " stringtie {input.bam} -eB -C {wildcards.smp}.2.ref.gtf -A stringtie_tab/{wildcards.smp}.2.tab -p 20 -G {input.gtf} -o {output.out}"
+
+rule clean:
+        message: "-- Removing {params} --"
+        params: "results", "fastqc","fastqc_dir","stringtie_gtf","star_input"
+        shell: "rm -rf {params}"
