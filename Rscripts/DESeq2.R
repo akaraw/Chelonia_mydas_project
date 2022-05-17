@@ -10,12 +10,16 @@ library(tools)
 library("ggplot2")
 library(magrittr)
 library("biomaRt")
+library(goseq)
 #BiocManager::install("biomaRt")
 library(apeglm)
 #BiocManager::install("apeglm")
 library("genefilter")
 library(tidyr)
 #BiocManager::install("EnhancedVolcano")
+library(extrafont)
+loadfonts(device = "win")
+windowsFonts()
 
 #### ~ DECLARE YOUR VARIABLES HERE ~ ####
 myspecies <- "C.mydas"
@@ -36,21 +40,23 @@ backup <- sample_table
 
 sample_table = merge(meta2, sample_table, by.x="ID.Number", by.y="ID.Number")
 
-
 source('../../Rscripts/myheatmap_plot.R')
 source('../../Rscripts/mytopgene.R')
 source('../../Rscripts/Myvolcano_plot.R')
-#sample_table <- meta2
 
 sampleFiles <- paste0(pull(sample_table, 'ID.Number'),'.tsv')
 sampleFiles
-
 all(file.exists(sampleFiles))
 
 names(sampleFiles) <- pull(sample_table, 'ID.Number')
 names(sampleFiles)
 
 head(sample_table)
+
+gtf <- "C:/Users/kar131/OneDrive - CSIRO/15.Chritable_green_turtle/NCBI/GCF_015237465.2_rCheMyd1.pri.v2_genomic.gtf"
+txdb = makeTxDbFromGFF( gtf, format = "gtf")
+txsBygene=transcriptsBy(txdb,"gene")
+lengthdata=mean(width(txsBygene))
 
 sample_table$Arsenic.Cat
 Locality <- 'Locality.x'
@@ -207,7 +213,8 @@ colData(ddsKEEP)
 resultsNames(ddsKEEP)
 nonnormalized_counts <- counts(dds)
 write.table(nonnormalized_counts, file=paste(resultsdir, 
-                                             testgroup, "_cmydas_non_normalized_counts.txt", sep = ""), 
+                                             testgroup, 
+                                             "_cmydas_non_normalized_counts.txt", sep = ""), 
             sep="\t", quote=F, col.names=NA)
 normalized_counts <- counts(ddsKEEP, normalized=TRUE)
 write.table(normalized_counts, file=paste(resultsdir, testgroup, 
@@ -230,7 +237,7 @@ myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Sex, ddsKEEP = ddsK
 mytopgene(res, 'Sex', contrast, ddsKEEP)
 myvolcano(res)
 
-#### GSE - PCV Low vs High ####
+
 #### Design #2 - PCV ####
 (resultsNames(ddsKEEP))
 contrast <- 'PCV_Low_vs_High'
@@ -239,13 +246,66 @@ res
 table(is.na(res$padj))
 sum(res$padj<0.05, na.rm = T)
 resSig <- res[which(res$padj<0.05),]
+
+#### GSE - PCV Low vs High ####
+source("../../Rscripts/preparing_for_GSE.R")
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
 sum(res$log2FoldChange>0.58, na.rm = T)
 res[which(res$log2FoldChange>0.58),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$PCV, ddsKEEP = ddsKEEP)
 mytopgene(res, 'PCV', contrast, ddsKEEP)
 myvolcano(res)
-
 
 #### Design #3 - TP ####
 (resultsNames(ddsKEEP))
@@ -279,7 +339,7 @@ myvolcano(res)
 
 
 
-#### GSE - BCI Normal vs Low ####
+
 #### Design #5 - BCI ####
 (resultsNames(ddsKEEP))
 contrast <- 'BCI_Normal_vs_Low'
@@ -294,9 +354,82 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$BCI, ddsKEEP = ddsKEEP)
 mytopgene(res, 'BCI', contrast, ddsKEEP)
 myvolcano(res)
+#### GSE - BCI Normal vs Low ####
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
 
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
 
-#### GSE - Season Spring vs Autumn ####
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+tail(goResults)
+
+goResults = goResults[goResults$under_represented_pvalue<0.05,]
+goResults
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
+
+sum(res$log2FoldChange>0.58, na.rm = T)
+res[which(res$log2FoldChange>0.58),]
+write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
+myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$PCV, ddsKEEP = ddsKEEP)
+mytopgene(res, 'PCV', contrast, ddsKEEP)
+myvolcano(res)
 #### Design #6 - Season Spring vs Autumn ####
 (resultsNames(ddsKEEP))
 contrast <- 'Season_Spring_vs_Autumn'
@@ -311,7 +444,84 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Season, ddsKEEP = ddsKEEP)
 myvolcano(res)
 
-#### GSE - Season Winter vs Autumn ####
+#### GSE - Season Spring vs Autumn ####
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+tail(goResults)
+
+goResults = goResults[goResults$under_represented_pvalue<0.05,]
+goResults
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
+
 #### Design #7 - Season Winter vs Autumn ####
 (resultsNames(ddsKEEP))
 contrast <- 'Season_Winter_vs_Autumn'
@@ -326,7 +536,78 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Season, ddsKEEP = ddsKEEP)
 myvolcano(res)
 
-#### GSE - Season Winter vs Spring ####
+#### GSE - Season Winter vs Autumn ####
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
+
 #### Design #8 - Season Spring vs Winter ####
 sub_sampleTable <- sampleTable[sampleTable$Season == c("Spring", "Winter"),]
 sub_sampleTable
@@ -358,6 +639,77 @@ res[which(res$log2FoldChange>0.58),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Season, ddsKEEP = ddsKEEP)
 myvolcano(res)
+#### GSE - Season Winter vs Spring ####
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 #### Design #9 - Arsenic####
 design2 = '~ Season + Age + BCI + Sex  + FP  + PCV   + TP + Arsenic'
@@ -374,7 +726,7 @@ ddsKEEP <- ddsKEEP[mcols(ddsKEEP)$betaConv,]
 colData(ddsKEEP)
 resultsNames(ddsKEEP)
 
-#### GSE - Arsenic vs control ####
+
 contrast <- 'Arsenic_High_vs_Control'
 resArsenic <- results(ddsKEEP, alpha = 0.05, name = contrast)
 res <- resArsenic
@@ -382,6 +734,77 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Arsenic, ddsKEEP = ddsKEEP)
 myvolcano(res)
+
+#### GSE - Arsenic vs control ####
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 #### Design #10 - Magnesium####
 design3 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Magnesium'
@@ -418,7 +841,6 @@ myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Magnesium, ddsKEEP 
 myvolcano(res)
 
 
-#### GSE - Iron high vs Control ####
 #### Design #11 - Iron####
 design4 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Iron'
 dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
@@ -437,6 +859,76 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Iron, ddsKEEP = ddsKEEP)
 myvolcano(res)
+#### GSE - Iron high vs Control ####
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 #### Design #12 - Cobalt####
 design5 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Cobalt'
@@ -511,7 +1003,7 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Copper, ddsKEEP = ddsKEEP)
 myvolcano(res)
 
-#### GSE - Copper High vs Control ####
+
 contrast <- 'Copper_High_vs_Control'
 resCu <- results(ddsKEEP, alpha = 0.05, name = contrast)
 res <- resCu
@@ -520,6 +1012,76 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Copper, ddsKEEP = ddsKEEP)
 myvolcano(res)
 
+#### GSE - Copper High vs Control ####
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 #### Design #15 - Zinc####
 design8 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Zinc'
@@ -542,7 +1104,6 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Zinc, ddsKEEP = ddsKEEP)
 myvolcano(res)
-
 #### GSE - Zinc High vs Control ####
 contrast <- 'Zinc_High_vs_Control'
 resZn <- results(ddsKEEP, alpha = 0.05, name = contrast)
@@ -551,6 +1112,76 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Zinc, ddsKEEP = ddsKEEP)
 myvolcano(res)
+
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 #### Design #16 - Strontium####
 design9 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Strontium'
@@ -692,7 +1323,75 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myvolcano(res)
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Locality, ddsKEEP = ddsKEEP)
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
 
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 ###
 sampleTable$Locality
 sub_sampleTable <- sampleTable[sampleTable$Locality == c("South Trees", "MotB"),]
@@ -719,6 +1418,75 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myvolcano(res)
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Locality, ddsKEEP = ddsKEEP)
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 ###
 sampleTable$Locality
@@ -746,6 +1514,75 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myvolcano(res)
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Locality, ddsKEEP = ddsKEEP)
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 ###
 sampleTable$Locality
@@ -774,6 +1611,77 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myvolcano(res)
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Locality, ddsKEEP = ddsKEEP)
 
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
+
 #### Design #18 - Aluminium ####
 design10 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Aluminium'
 dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
@@ -798,9 +1706,76 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Aluminium, ddsKEEP = ddsKEEP)
 myvolcano(res)
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
 
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
 
-#### GSE - Cadmium Low vs High ####
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
+
 #### Design #19 - Cadmium ####
 sampleTable$Molybdinum
 design10 = '~ Season + Age + BCI + Sex + FP + PCV + TP + cad'
@@ -824,6 +1799,77 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Cadmium, ddsKEEP = ddsKEEP)
 myvolcano(res)
+
+#### GSE - Cadmium Low vs High ####
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 #### Design #20 - Molybdenum ####
 sampleTable$Molybdinum
@@ -875,7 +1921,66 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Cadmium, ddsKEEP = ddsKEEP)
 myvolcano(res)
 
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
 
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 
 #### Design #22 - Age ####
 dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
@@ -900,6 +2005,75 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Age, ddsKEEP = ddsKEEP)
 myvolcano(res)
 
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 contrast <- "Age_Subadult_vs_Adult"
 resAge <- results(ddsKEEP, alpha = 0.05, name = contrast)
 res <- resAge
@@ -934,6 +2108,76 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Age, ddsKEEP = ddsKEEP)
 myvolcano(res)
 
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
 sampleTable$fileName<- as.factor(sampleTable$fileName)
 sampleTable$fileName
 
@@ -962,3 +2206,74 @@ resSig <- res[which(res$padj<0.05),]
 write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas.csv", sep = "") )
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$FP, ddsKEEP = ddsKEEP)
 myvolcano(res)
+
+assayed.genes <- rownames(res)
+de.genes <- rownames(resSig)
+gene.vector=as.integer(assayed.genes%in%de.genes)
+names(gene.vector)=assayed.genes
+
+G2GO <- gene2go[which(gene2go$symbol %in% names(gene.vector)),]
+dim(G2GO)
+
+geneID2GO <- by(G2GO$symbol,
+                G2GO$V14,
+                function(x) as.data.frame(x))
+
+head(geneID2GO,15)
+head(lengthdata)
+where <- match(names(gene.vector), names(lengthdata))
+lengthdata <- lengthdata[where]
+
+pwf<- nullp(gene.vector,id = geneID2GO,bias.data = lengthdata)
+plotPWF(pwf,binsize = 1000)
+
+goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
+
+class(goResults)
+head(goResults)
+nrow(goResults)
+
+goResults
+
+write.csv( as.data.frame(goResults), file=paste0(resultsdir, "/", contrast, "_gores.csv" ))
+enriched.GO=goResults$category[goResults$over_represented_pvalue<0.05]
+
+class(enriched.GO)
+head(enriched.GO)
+length(enriched.GO)
+write.csv(as.character(enriched.GO), file = paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".csv"))
+
+goResults = goResults[goResults$over_represented_pvalue<0.05,]
+goResults[goResults$ontology == 'BP',]
+goBPRes <- goResults[goResults$ontology == 'BP',] 
+goBPRes
+
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+
+pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", myspecies, ".pdf"), width = 6, height = 7)
+goResults %>% 
+  top_n(30, wt=-over_represented_pvalue) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+  ggplot(aes(x=hitsPerc, y=term)) + 
+  geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+  theme(text = element_text(size = 12, family = "serif")) +
+  labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+dev.off()
+
+if (nrow(goResults) > 0) {
+  pdf(paste0(resultsdir, "/", contrast, "_enriched_go_", "under_represented_", myspecies, ".pdf"), width = 6, height = 7)
+  goResults %>% 
+    top_n(30, wt=-over_represented_pvalue) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, y=term)) + 
+    geom_bar(stat = "identity", colour = "green", fill = "forestgreen") +
+    theme(text = element_text(size = 12, family = "serif")) +
+    labs(x="Hits (%)", y=NULL, colour="p value", size="Count") 
+  dev.off()
+}
