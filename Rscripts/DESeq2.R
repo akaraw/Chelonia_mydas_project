@@ -44,6 +44,7 @@ source('../../Rscripts/myheatmap_plot.R')
 source('../../Rscripts/mytopgene.R')
 source('../../Rscripts/Myvolcano_plot.R')
 source("../../Rscripts/mygoplots.R")
+source("../../Rscripts/myGOPlot_GO.R")
 
 sampleFiles <- paste0(pull(sample_table, 'ID.Number'),'.tsv')
 sampleFiles
@@ -177,10 +178,12 @@ sampleTable <- data.frame(sampleName = sample_table$ID.Number,
                           BCI = as.factor(sampleBCI),
                           FP = as.factor(samplefibro))
 head(sampleTable)
-resultsdir <- 'C:/Users/kar131/OneDrive - CSIRO/15.Chritable_green_turtle/analysis_07122021/'
+resultsdir <- 'C:/Users/kar131/OneDrive - CSIRO/15.Chritable_green_turtle/analysis_08102022/'
 dir.create(resultsdir, recursive = T)
 write.csv(sample_table, file = paste0(resultsdir, 'fulltable.csv'), quote = F)
 write.csv(sampleTable, file = paste0(resultsdir, 'table_matrix.csv'), quote = F)
+
+
 
 #Design #1
 design1 = '~ Season + Age + BCI + Sex + FP + PCV + TP'
@@ -238,7 +241,6 @@ myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$Sex, ddsKEEP = ddsK
 mytopgene(res, 'Sex', contrast, ddsKEEP)
 myvolcano(res)
 
-
 #### Design #2 - PCV ####
 (resultsNames(ddsKEEP))
 contrast <- 'PCV_Low_vs_High'
@@ -263,6 +265,32 @@ geneID2GO <- by(G2GO$symbol,
                 function(x) as.data.frame(x))
 
 head(geneID2GO,15)
+
+#Setting up for goplot
+GOdf <- data.frame(GO=NA,Genes=NA)
+for (i in 1:length(names(geneID2GO))){
+  GO=names(geneID2GO)[i]
+  genes=as.character(geneID2GO[[i]])
+  GOdft=data.frame(GO=GO[1], Genes=genes[])
+  GOdf <- rbind(GOdf, GOdft)
+}
+
+length(names(geneID2GO))
+
+library(dplyr)
+GOdf <- GOdf %>%
+  group_by(GO) %>%
+  summarise(Genes = toString(Genes)) %>%
+  ungroup()
+head(GOdf, 20)
+
+GOdf$GO <- gsub("\\.", "\\:", GOdf$GO) 
+head(GOdf)
+GOdf$Genes <- gsub("^\\s+|\\s+$", "", GOdf$Genes)
+GOdf$Genes <- noquote(GOdf$Genes)
+GOdf$Genes <- gsub("\\s", "", GOdf$Genes)
+GOdf$Genes <- gsub(",", ", ", GOdf$Genes)
+
 head(lengthdata)
 where <- match(names(gene.vector), names(lengthdata))
 lengthdata <- lengthdata[where]
@@ -272,6 +300,8 @@ plotPWF(pwf,binsize = 1000)
 
 goResults <- goseq(pwf,gene2cat = geneID2GO, method = "Wallenius", repcnt = 2000)
 
+head(geneID2GO)
+class(geneID2GO)
 class(goResults)
 head(goResults)
 nrow(goResults)
@@ -300,6 +330,13 @@ myvolcano(res)
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+
+resSig
+species <- "cmydas"
+contrast
+resultsdir
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
+
 #### Design #3 - TP ####
 (resultsNames(ddsKEEP))
 contrast <- 'TP_Low_vs_High'
@@ -330,7 +367,7 @@ myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$FP, ddsKEEP = ddsKE
 mytopgene(res, 'FP', contrast, ddsKEEP)
 myvolcano(res)
 
-
+#"697, 755, 801, 803 - control; 724, 772, 776, 842 - diseased"
 
 
 #### Design #5 - BCI ####
@@ -392,6 +429,7 @@ goBPRes
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 sum(res$log2FoldChange>0.58, na.rm = T)
 res[which(res$log2FoldChange>0.58),]
@@ -399,6 +437,8 @@ write.csv( as.data.frame(resSig), file=paste(resultsdir, contrast, "_DEGS_cmydas
 myheatmap(res = res, contrast = contrast, intgroup = ddsKEEP$PCV, ddsKEEP = ddsKEEP)
 mytopgene(res, 'PCV', contrast, ddsKEEP)
 myvolcano(res)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
+
 #### Design #6 - Season Spring vs Autumn ####
 (resultsNames(ddsKEEP))
 contrast <- 'Season_Spring_vs_Autumn'
@@ -466,6 +506,8 @@ goResults %>%
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
 
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
+
 #### Design #7 - Season Winter vs Autumn ####
 (resultsNames(ddsKEEP))
 contrast <- 'Season_Winter_vs_Autumn'
@@ -532,7 +574,7 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
-
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 #### Design #8 - Season Spring vs Winter ####
 sub_sampleTable <- sampleTable[sampleTable$Season == c("Spring", "Winter"),]
 sub_sampleTable
@@ -619,6 +661,8 @@ goResults %>%
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
 
+#myGOPlot(res, species, contrast, goBPRes,resultsdir)
+
 #### Design #9 - Arsenic####
 design2 = '~ Season + Age + BCI + Sex  + FP  + PCV   + TP + Arsenic'
 dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
@@ -695,7 +739,7 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
-
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 #### Design #10 - Magnesium####
 design3 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Magnesium'
 dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
@@ -803,6 +847,7 @@ goResults %>%
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
 
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 #### Design #12 - Cobalt####
 design5 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Cobalt'
 dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
@@ -937,6 +982,7 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 #### Design #15 - Zinc####
 design8 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Zinc'
@@ -1020,6 +1066,8 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 #### Design #16 - Strontium####
 design9 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Strontium'
@@ -1212,6 +1260,8 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
+
 ###
 sampleTable$Locality
 sub_sampleTable <- sampleTable[sampleTable$Locality == c("South Trees", "MotB"),]
@@ -1290,6 +1340,7 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+#myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 ###
 sampleTable$Locality
@@ -1368,6 +1419,7 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 ###
 sampleTable$Locality
@@ -1447,7 +1499,7 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
-
+#myGOPlot(res, species, contrast, goBPRes,resultsdir)
 #### Design #18 - Aluminium ####
 design10 = '~ Season + Age + BCI + Sex + FP + PCV + TP + Aluminium'
 dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
@@ -1524,6 +1576,8 @@ goResults %>%
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
 
+#myGOPlot(res, species, contrast, goBPRes,resultsdir)
+#goBPRes
 #### Design #19 - Cadmium ####
 sampleTable$Molybdinum
 design10 = '~ Season + Age + BCI + Sex + FP + PCV + TP + cad'
@@ -1600,6 +1654,8 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+goBPRes
+#myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 #### Design #20 - Molybdenum ####
 sampleTable$Molybdinum
@@ -1694,6 +1750,7 @@ goBPRes
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 #### Design #22 - Age ####
 dds <- DESeqDataSetFromHTSeqCount(sampleTable = sampleTable,
@@ -1769,6 +1826,7 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 contrast <- "Age_Subadult_vs_Adult"
 resAge <- results(ddsKEEP, alpha = 0.05, name = contrast)
@@ -1855,6 +1913,7 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
 
 sampleTable$fileName<- as.factor(sampleTable$fileName)
 sampleTable$fileName
@@ -1936,3 +1995,6 @@ goResults %>%
 
 mygoplot(contrast = contrast, pwf = pwf, goResults = goResults, myspecies = myspecies
          , resultsdir = resultsdir, method = "Wallenius", repcnt = 2000, geneID2GO = geneID2GO)
+myGOPlot(res, species, contrast, goBPRes,resultsdir)
+
+sessionInfo()
